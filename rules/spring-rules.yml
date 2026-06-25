@@ -1,0 +1,516 @@
+rules:
+  # ============================================================
+  # A01: Broken Access Control (Spring MVC / REST)
+  # ============================================================
+
+  - id: SPRING-OWASP-MISSING-AUTHZ-ANNOTATION
+    message: >
+      This API endpoint doesn't check if the user is allowed to access it.
+      Without access controls, anyone (including attackers) can call this endpoint.
+      Add @PreAuthorize or @Secured annotations to restrict access to authorized users only.
+      See the references for implementation examples.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A01:2021 Broken Access Control"
+      cwe: "CWE-306"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Access_Control_Cheat_Sheet.html "
+        - "https://docs.spring.io/spring-security/reference/servlet/authorization/method-security.html "
+    paths:
+      include:
+        - "**/src/main/java/**"
+      exclude:
+        - "**/src/test/**"
+        - "**/*Test.java"
+        - "**/*Tests.java"
+        - "**/target/**"
+        - "**/build/**"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @GetMapping(...)
+              public $RET $M(...){ ... }
+          - pattern: |
+              @PostMapping(...)
+              public $RET $M(...){ ... }
+          - pattern: |
+              @PutMapping(...)
+              public $RET $M(...){ ... }
+          - pattern: |
+              @DeleteMapping(...)
+              public $RET $M(...){ ... }
+          - pattern: |
+              @RequestMapping(...)
+              public $RET $M(...){ ... }
+      - pattern-not-inside: |
+          @PreAuthorize(...)
+          public $RET $M(...){ ... }
+      - pattern-not-inside: |
+          @Secured(...)
+          public $RET $M(...){ ... }
+      - pattern-not-inside: |
+          @RolesAllowed(...)
+          public $RET $M(...){ ... }
+
+  - id: SPRING-OWASP-OBJECT-LEVEL-AUTH-IDOR
+    message: >
+      This code looks up data using an ID that comes from the user, but doesn't verify 
+      that the user actually owns that data. This means User A could access User B's 
+      private information by simply changing the ID in the request.
+      Always check ownership before returning data. See the reference for prevention patterns.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A01:2021 Broken Access Control"
+      cwe: "CWE-639"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Insecure_Direct_Object_Reference_Prevention_Cheat_Sheet.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@PathVariable $T $ID"
+          - pattern: "@RequestParam $T $ID"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $REPO.findById($ID)
+          - pattern: $REPO.getById($ID)
+          - pattern: $REPO.getReferenceById($ID)
+          - pattern: $REPO.findOneById($ID)
+          - pattern: $SERVICE.getById($ID)
+          - pattern: $SERVICE.findById($ID)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: $OBJ.getOwner().equals($AUTH.getName())
+          - pattern: $OBJ.getUser().getId().equals($AUTH_ID)
+          - pattern: $AUTHZ.check(...)
+          - pattern: $SEC.isAllowed(...)
+          - pattern: $ACL.canAccess(...)
+
+  - id: SPRING-OWASP-OPEN-REDIRECT
+    message: >
+      This redirect uses a URL that comes from user input. Attackers can exploit this 
+      to send users to fake login pages or malicious websites that look legitimate.
+      Always validate redirect URLs against an allowlist of trusted destinations.
+      See the reference for safe redirect handling techniques.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A01:2021 Broken Access Control"
+      cwe: "CWE-601"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Unvalidated_Redirects_and_Forwards_Cheat_Sheet.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $URL"
+          - pattern: "@RequestParam $T $URL"
+          - pattern: "@PathVariable String $URL"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: return "redirect:" + $URL;
+          - pattern: new org.springframework.web.servlet.view.RedirectView($URL);
+          - pattern: $RESP.sendRedirect($URL);
+
+  # ============================================================
+  # A02: Cryptographic Failures
+  # ============================================================
+
+  - id: SPRING-OWASP-NOOP-PASSWORD-ENCODER
+    message: >
+      This code stores passwords in plain text without any encryption or hashing.
+      If your database is ever compromised, attackers get everyone's passwords immediately.
+      Use BCryptPasswordEncoder (or similar) to securely hash passwords before storage.
+      See Spring Security documentation for proper password storage setup.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A02:2021 Cryptographic Failures"
+      cwe: "CWE-259"
+      references:
+        - "https://docs.spring.io/spring-security/reference/features/authentication/password-storage.html "
+    pattern-either:
+      - pattern: org.springframework.security.crypto.password.NoOpPasswordEncoder.getInstance(...)
+      - pattern: new org.springframework.security.crypto.password.NoOpPasswordEncoder(...)
+
+  - id: SPRING-OWASP-WEAK-HASH-MD5-SHA1
+    message: >
+      This code uses MD5 or SHA-1, which are outdated hashing algorithms that can be 
+      cracked quickly with modern tools. These should not be used for passwords or sensitive data.
+      Upgrade to SHA-256 or better yet, use purpose-built password hashing like BCrypt.
+      See the cryptographic storage guide for recommended algorithms.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A02:2021 Cryptographic Failures"
+      cwe: "CWE-327"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html "
+    pattern-either:
+      - pattern: java.security.MessageDigest.getInstance("MD5")
+      - pattern: java.security.MessageDigest.getInstance("SHA-1")
+
+  # ============================================================
+  # A03: Injection (SQLi, XSS, Command, File, SSTI, XXE, LDAP)
+  # ============================================================
+
+  - id: SPRING-OWASP-SQLI-JDBCTEMPLATE-CONCAT
+    message: >
+      This code builds SQL queries by joining strings with user input. Attackers can 
+      inject malicious SQL commands to read, modify, or delete your entire database.
+      Use parameterized queries with ? placeholders instead of string concatenation.
+      See the SQL Injection Prevention Cheat Sheet for code examples.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-89"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html "
+        - "https://docs.spring.io/spring-framework/reference/data-access/jdbc/core.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $X"
+          - pattern: "@PathVariable String $X"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $JDBC.query($SQL, ...)
+          - pattern: $JDBC.queryForObject($SQL, ...)
+          - pattern: $JDBC.update($SQL, ...)
+          - pattern: $JDBC.execute($SQL)
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: $JDBC.query($SQL, $ARGS, ...)
+          - pattern: $JDBC.update($SQL, $ARGS, ...)
+
+  - id: SPRING-OWASP-XSS-RESPONSEBODY-RAW
+    message: >
+      This code returns user input directly in HTTP responses without escaping.
+      Attackers can inject JavaScript that runs in other users' browsers to steal 
+      session cookies or perform actions on their behalf.
+      Use HtmlUtils.htmlEscape() to sanitize user content before displaying it.
+      See the XSS Prevention Cheat Sheet for comprehensive protection strategies.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-79"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Cross_Site_Scripting_Prevention_Cheat_Sheet.html "
+        - "https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-controller/ann-responsebody.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $X"
+          - pattern: "@PathVariable String $X"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: return $X;
+          - pattern: return org.springframework.http.ResponseEntity.ok($X);
+    pattern-sanitizers:
+      - pattern-either:
+          - pattern: org.springframework.web.util.HtmlUtils.htmlEscape($X)
+          - pattern: org.springframework.web.util.HtmlUtils.htmlEscapeDecimal($X)
+
+  - id: SPRING-OWASP-CMDI-RUNTIME-EXEC
+    message: >
+      This code executes system commands that include user input. This is extremely 
+      dangerous as attackers can run any command on your server (delete files, install 
+      malware, access sensitive data).
+      Avoid executing system commands with user input entirely. If absolutely necessary,
+      use strict allowlists and input validation. See the OS Command Injection Defense guide.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-78"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/OS_Command_Injection_Defense_Cheat_Sheet.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $CMD"
+          - pattern: "@PathVariable String $CMD"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: java.lang.Runtime.getRuntime().exec($CMD)
+          - pattern: new java.lang.ProcessBuilder($CMD, ...)
+          - pattern: new java.lang.ProcessBuilder(...).command($CMD, ...)
+
+  - id: SPRING-OWASP-FILEUPLOAD-NO-EXT-WHITELIST
+    message: >
+      This file upload accepts any file type without validation. Attackers can upload 
+      executable files, scripts, or malware that compromise your server.
+      Implement server-side checks to only allow specific, safe file extensions 
+      (e.g., .jpg, .png, .pdf) and verify content types. See the File Upload Cheat Sheet.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-434"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/File_Upload_Cheat_Sheet.html "
+    patterns:
+      - pattern: |
+          public $RET $M(..., org.springframework.web.multipart.MultipartFile $FILE, ...){ ... }
+      - pattern-not-inside: |
+          public $RET $M(..., org.springframework.web.multipart.MultipartFile $FILE, ...){
+            ...
+            $NAME = $FILE.getOriginalFilename();
+            ...
+            if ($NAME.endsWith(...)) { ... }
+            ...
+          }
+
+  - id: SPRING-OWASP-SSTI-STRINGTEMPLATE
+    message: >
+      This code uses user input as a template string. Template engines can execute 
+      code, so attackers may be able to run arbitrary commands on your server.
+      Never allow users to provide template content. Use fixed templates with 
+      user data passed as parameters only. See the SSTI Prevention Cheat Sheet.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-94"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Template_Injection_Prevention_Cheat_Sheet.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $TPL"
+          - pattern: "@PathVariable String $TPL"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: new org.stringtemplate.v4.ST($TPL)
+          - pattern: new org.springframework.expression.spel.standard.SpelExpressionParser().parseExpression($TPL)
+
+  - id: SPRING-OWASP-XXE-DOCUMENTBUILDER
+    message: >
+      This XML parser processes external file references (XXE). Attackers can exploit 
+      this to read sensitive files from your server (like /etc/passwd or application 
+      configuration files containing passwords).
+      Disable external entity processing and DTDs in your XML parser configuration.
+      See the XXE Prevention Cheat Sheet for secure configuration examples.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-611"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/XML_External_Entity_Prevention_Cheat_Sheet.html "
+    patterns:
+      - pattern: |
+          javax.xml.parsers.DocumentBuilderFactory $F = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+          ...
+          $F.newDocumentBuilder().parse(...);
+      - pattern-not-inside: |
+          $F.setFeature("http://apache.org/xml/features/disallow-doctype-decl ", true);
+
+  - id: SPRING-OWASP-LDAP-INJECTION-FILTER
+    message: >
+      This LDAP query includes user input directly in the search filter. Attackers can 
+      modify the query to access unauthorized directory information or bypass authentication.
+      Use parameterized LDAP queries or proper escaping mechanisms instead of string 
+      concatenation. See the LDAP Injection Prevention Cheat Sheet for safe patterns.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A03:2021 Injection"
+      cwe: "CWE-90"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/LDAP_Injection_Prevention_Cheat_Sheet.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $U"
+          - pattern: "@PathVariable String $U"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $CTX.search($BASE, $FILTER, ...)
+          - pattern: $LDAP.search($BASE, $FILTER, ...)
+
+  # ============================================================
+  # A04: Insecure Design (Mass assignment / business logic)
+  # ============================================================
+
+  - id: SPRING-OWASP-MASS-ASSIGNMENT-REQUESTBODY-ENTITY
+    message: >
+      This endpoint binds user input directly to database entities. Attackers can 
+      submit extra fields to modify data they shouldn't access (like changing their 
+      role to 'admin' or modifying other users' records).
+      Use Data Transfer Objects (DTOs) to explicitly define which fields can be 
+      modified, then copy only those fields to your entity. See the Mass Assignment Cheat Sheet.
+    severity: WARNING
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A04:2021 Insecure Design"
+      cwe: "CWE-915"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Mass_Assignment_Cheat_Sheet.html "
+    patterns:
+      - pattern: |
+          public $RET $M(..., @RequestBody $ENTITY $X, ...){ ... }
+
+  # ============================================================
+  # A05: Security Misconfiguration
+  # ============================================================
+
+  - id: SPRING-OWASP-CSRF-DISABLED
+    message: >
+      CSRF protection is disabled. This allows malicious websites to perform actions 
+      on behalf of logged-in users without their knowledge (like changing passwords 
+      or making purchases).
+      Keep CSRF protection enabled for browser-based applications. If building a 
+      stateless API for mobile apps or SPAs, use token-based authentication instead.
+      See Spring Security's CSRF documentation for proper configuration.
+    severity: WARNING
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A05:2021 Security Misconfiguration"
+      cwe: "CWE-352"
+      references:
+        - "https://docs.spring.io/spring-security/reference/servlet/exploits/csrf.html "
+    pattern-either:
+      - pattern: $HTTP.csrf().disable()
+      - pattern: $HTTP.csrf(csrf -> csrf.disable())
+
+  - id: SPRING-OWASP-CORS-ALLOW-ALL
+    message: >
+      CORS is configured to allow requests from any website. While this enables 
+      cross-origin access, it also allows malicious websites to make requests to 
+      your API using victims' credentials.
+      Restrict CORS to specific, trusted origins that actually need access. 
+      See Spring's CORS documentation for proper configuration patterns.
+    severity: WARNING
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A05:2021 Security Misconfiguration"
+      references:
+        - "https://docs.spring.io/spring-framework/reference/web/webmvc/mvc-cors.html "
+    pattern-either:
+      - pattern: $C.setAllowedOrigins(java.util.List.of("*"))
+      - pattern: $C.addAllowedOrigin("*")
+      - pattern: $C.addAllowedOriginPattern("*")
+
+  # ============================================================
+  # A06: Vulnerable and Outdated Components
+  # ============================================================
+
+  - id: SPRING-OWASP-OUTDATED-SPRING-BOOT
+    message: >
+      This project uses an outdated Spring Boot version that may contain known 
+      security vulnerabilities. Older versions don't receive security patches.
+      Upgrade to a currently supported Spring Boot version (3.x recommended).
+      Check the Spring Boot website for support timelines and migration guides.
+    severity: ERROR
+    languages: [generic]
+    metadata:
+      category: security
+      owasp: "A06:2021 Vulnerable and Outdated Components"
+      references:
+        - "https://spring.io/projects/spring-boot "
+    paths:
+      include:
+        - "**/pom.xml"
+        - "**/build.gradle"
+        - "**/build.gradle.kts"
+    patterns:
+      - pattern-regex: "(?i)<spring-boot\\.version>1\\."
+      - pattern-regex: "(?i)<spring-boot\\.version>2\\.0"
+      - pattern-regex: "(?i)org\\.springframework\\.boot:spring-boot-starter-parent:1\\."
+      - pattern-regex: "(?i)org\\.springframework\\.boot:spring-boot-starter-parent:2\\.0"
+
+  # ============================================================
+  # A08: Software and Data Integrity Failures (Deserialization)
+  # ============================================================
+
+  - id: SPRING-OWASP-INSECURE-DESERIALIZATION
+    message: >
+      This code deserializes Java objects from untrusted sources. Attackers can 
+      craft malicious objects that execute arbitrary code when deserialized, 
+      potentially taking complete control of your server.
+      Avoid Java native serialization for external data. Use JSON with Jackson 
+      or similar safe formats instead. See the Deserialization Cheat Sheet for alternatives.
+    severity: ERROR
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A08:2021 Software and Data Integrity Failures"
+      cwe: "CWE-502"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Deserialization_Cheat_Sheet.html "
+    patterns:
+      - pattern: new java.io.ObjectInputStream($IN).readObject()
+
+  # ============================================================
+  # A09: Security Logging Failures
+  # ============================================================
+
+  - id: SPRING-OWASP-LOG-INJECTION-CONCAT
+    message: >
+      This log message is built by concatenating strings with user input. Attackers 
+      can inject fake log entries or hide their activities by including newlines 
+      or special characters in their input.
+      Use parameterized logging (logger.info("User: {}", username)) which safely 
+      handles special characters. See the Logging Cheat Sheet for secure logging practices.
+    severity: INFO
+    languages: [java]
+    metadata:
+      category: security
+      owasp: "A09:2021 Security Logging and Monitoring Failures"
+      cwe: "CWE-117"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Logging_Cheat_Sheet.html "
+    pattern-either:
+      - pattern: $LOG.info("..." + $X)
+      - pattern: $LOG.warn("..." + $X)
+      - pattern: $LOG.error("..." + $X)
+
+  # ============================================================
+  # A10: Server-Side Request Forgery (SSRF)
+  # ============================================================
+
+  - id: SPRING-OWASP-SSRF-RESTTEMPLATE
+    message: >
+      This code makes HTTP requests to URLs provided by users. Attackers can exploit 
+      this to access internal services (like databases or admin panels), cloud 
+      metadata endpoints, or sensitive internal APIs that aren't publicly exposed.
+      Validate URLs against an allowlist of approved destinations and block 
+      internal IP ranges. See the SSRF Prevention Cheat Sheet for implementation guidance.
+    severity: ERROR
+    languages: [java]
+    mode: taint
+    metadata:
+      category: security
+      owasp: "A10:2021 SSRF"
+      cwe: "CWE-918"
+      references:
+        - "https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html "
+    pattern-sources:
+      - pattern-either:
+          - pattern: "@RequestParam String $URL"
+          - pattern: "@PathVariable String $URL"
+    pattern-sinks:
+      - pattern-either:
+          - pattern: $RT.getForObject($URL, ...)
+          - pattern: $RT.getForEntity($URL, ...)
+          - pattern: $RT.postForObject($URL, ...)
+          - pattern: $WC.get().uri($URL)
+          - pattern: $HC.send($REQ, ...)
