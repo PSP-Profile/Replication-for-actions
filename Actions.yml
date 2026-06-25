@@ -1,0 +1,168 @@
+name: 'Pedagogical SAST Profile (PSP)'
+description: >
+  A Semgrep-based SAST action designed for tutorial and learning contexts.
+  Automatically detects Java (Spring) and Python (Django) projects.
+
+author: 'Anonymous'
+
+branding:
+  icon: 'shield'
+  color: 'purple'
+
+inputs:
+  framework:
+    description: 'Target framework: django, spring, both, or auto (detects based on source files)'
+    required: false
+    default: 'auto'
+  scan-path:
+    description: 'Path to scan (default: repository root)'
+    required: false
+    default: '.'
+  output-format:
+    description: 'Output format: text, json, or sarif'
+    required: false
+    default: 'sarif'
+  output-file:
+    description: 'Output file path'
+    required: false
+    default: 'psp-results.sarif'
+  fail-on-finding:
+    description: 'Fail the build if any ERROR severity rule triggers'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Semgrep
+      run: pip install semgrep
+      shell: bash
+
+    - name: Detect project languages
+      id: detect
+      if: ${{ inputs.framework == 'auto' }}
+      run: |
+        SCAN_PATH="${{ inputs.scan-path }}"
+        echo "Scanning $SCAN_PATH for source files..."
+        
+        HAS_JAVA=false
+        HAS_PYTHON=false
+        
+        if find "$SCAN_PATH" -type f -name "*.java" 2>/dev/null | grep -q .; then
+          HAS_JAVA=true
+          echo "✓ Detected Java source files"
+        fi
+        
+        if find "$SCAN_PATH" -type f -name "*.py" 2>/dev/null | grep -q .; then
+          HAS_PYTHON=true
+          echo "✓ Detected Python source files"
+        fi
+        
+        echo "has_java=$HAS_JAVA" >> $GITHUB_OUTPUT
+        echo "has_python=$HAS_PYTHON" >> $GITHUB_OUTPUT
+      shell: bash
+
+    - name: Determine rules to run
+      id: rules
+      run: |
+        ACTION_PATH="${{ github.action_path }}"
+        FRAMEWORK="${{ inputs.framework }}"
+        
+        if [ "$FRAMEWORK" == "auto" ]; then
+          HAS_JAVA="${{ steps.detect.outputs.has_java }}"
+          HAS_PYTHON="${{ steps.detect.outputs.has_python }}"
+          
+          if [ "$HAS_JAVA" == "true" ] && [ "$HAS_PYTHON" == "true" ]; then
+            echo "config=${ACTION_PATH}/config/profile-config.yml" >> $GITHUB_OUTPUT
+            echo "framework=both" >> $GITHUB_OUTPUT
+            echo "::notice::Auto-detected Java + Python. Running both Spring and Django rules."
+          elif [ "$HAS_JAVA" == "true" ]; then
+            echo "config=${ACTION_PATH}/rules/spring-rules.yml" >> $GITHUB_OUTPUT
+            echo "framework=spring" >> $GITHUB_OUTPUT
+            echo "::notice::Auto-detected Java. Running Spring rules."
+          elif [ "$HAS_PYTHON" == "true" ]; then
+            echo "config=${ACTION_PATH}/rules/django-rules.yml" >> $GITHUB_OUTPUT
+            echo "framework=django" >> $GITHUB_OUTPUT
+            echo "::notice::Auto-detected Python. Running Django rules."
+          else
+            echo "config=${ACTION_PATH}/config/profile-config.yml" >> $GITHUB_OUTPUT
+            echo "framework=both" >> $GITHUB_OUTPUT
+            echo "::warning::No Java or Python files detected. Falling back to both frameworks."
+          fi
+        elif [ "$FRAMEWORK" == "django" ]; then
+          echo "config=${ACTION_PATH}/rules/django-rules.yml" >> $GITHUB_OUTPUT
+          echo "framework=django" >> $GITHUB_OUTPUT
+        elif [ "$FRAMEWORK" == "spring" ]; then
+          echo "config=${ACTION_PATH}/rules/spring-rules.yml" >> $GITHUB_OUTPUT
+          echo "framework=spring" >> $GITHUB_OUTPUT
+        else
+          echo "config=${ACTION_PATH}/config/profile-config.yml" >> $GITHUB_OUTPUT
+          echo "framework=both" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Build Semgrep arguments
+      id: args
+      run: |
+        if [ "${{ inputs.output-format }}" == "sarif" ]; then
+          echo "fmt=--sarif" >> $GITHUB_OUTPUT
+        elif [ "${{ inputs.output-format }}" == "json" ]; then
+          echo "fmt=--json" >> $GITHUB_OUTPUT
+        else
+          echo "fmt=" >> $GITHUB_OUTPUT
+        fi
+
+        if [ "${{ inputs.fail-on-finding }}" == "true" ]; then
+          echo "err=--error" >> $GITHUB_OUTPUT
+        else
+          echo "err=" >> $GITHUB_OUTPUT
+        fi
+      shell: bash
+
+    - name: Run PSP Scan
+      run: |
+        FRAMEWORK="${{ steps.rules.outputs.framework }}"
+        
+        # Build dynamic includes based on detected framework
+        INCLUDES=()
+        if [ "$FRAMEWORK" == "spring" ]; then
+          INCLUDES+=(--include "**/*.java")
+          INCLUDES+=(--include "**/*.html")
+        elif [ "$FRAMEWORK" == "django" ]; then
+          INCLUDES+=(--include "**/*.py")
+          INCLUDES+=(--include "**/*.html")
+        else
+          INCLUDES+=(--include "**/*.py")
+          INCLUDES+=(--include "**/*.java")
+          INCLUDES+=(--include "**/*.html")
+        fi
+        
+        semgrep \
+          --config "${{ steps.rules.outputs.config }}" \
+          ${{ steps.args.outputs.fmt }} \
+          --output "${{ inputs.output-file }}" \
+          ${{ steps.args.outputs.err }} \
+          "${INCLUDES[@]}" \
+          --exclude="**/tests/**" \
+          --exclude="**/migrations/**" \
+          --exclude="**/__pycache__/**" \
+          --exclude="**/*.pyc" \
+          --exclude="**/.venv/**" \
+          --exclude="**/node_modules/**" \
+          --exclude="**/target/**" \
+          --exclude="**/build/**" \
+          --exclude="**/.git/**" \
+          "${{ inputs.scan-path }}"
+      shell: bash
+
+    - name: Upload SARIF to GitHub Code Scanning
+      if: ${{ inputs.output-format == 'sarif' && always() }}
+      uses: github/codeql-action/upload-sarif@v4
+      with:
+        sarif_file: ${{ inputs.output-file }}
+        category: pedagogical-sast-profile
