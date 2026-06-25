@@ -1,0 +1,25 @@
+# Semgrep profile configuration based on the paper's PSP
+rules:
+  - ../rules/django-rules.yml
+  - ../rules/spring-rules.yml
+
+# Scope to tutorial-authored code only (Section 4.2, 5.1)
+paths:
+  include:
+    - "**/*.py"
+    - "**/*.java"
+    - "**/*.html"
+    - "**/*.js"
+  exclude:
+    - "**/tests/**"
+    - "**/test*/**"
+    - "**/*Test.java"
+    - "**/*Tests.java"
+    - "**/migrations/**"
+    - "**/__pycache__/**"
+    - "**/*.pyc"
+    - "**/.venv/**"
+    - "**/node_modules/**"
+    - "**/target/**"
+    - "**/build/**"
+    - "**/.git/**"
